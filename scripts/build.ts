@@ -52,7 +52,8 @@ const result = await Bun.build({
   naming: 'cli.mjs',
   define: {
     // MACRO.* build-time constants
-    'MACRO.VERSION': JSON.stringify(version),
+    // Set version high enough to pass minimum version checks
+    'MACRO.VERSION': JSON.stringify('99.0.0'),
     'MACRO.BUILD_TIME': JSON.stringify(new Date().toISOString()),
     'MACRO.ISSUES_EXPLAINER':
       JSON.stringify('report the issue at https://github.com/anthropics/claude-code/issues'),

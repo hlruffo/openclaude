@@ -14,12 +14,47 @@ type ProfileFile = {
   }
 }
 
-function parseProfile(argv: string[]): ProviderProfile | 'auto' | null {
-  const profile = argv[0]?.toLowerCase()
-  if (!profile) return 'auto'
-  if (profile === 'auto') return 'auto'
-  if (profile === 'openai' || profile === 'ollama') return profile
-  return null
+type LaunchOptions = {
+  requestedProfile: ProviderProfile | 'auto' | null
+  passthroughArgs: string[]
+  fast: boolean
+}
+
+function parseLaunchOptions(argv: string[]): LaunchOptions {
+  let requestedProfile: ProviderProfile | 'auto' | null = 'auto'
+  const passthroughArgs: string[] = []
+  let fast = false
+
+  for (const arg of argv) {
+    const lower = arg.toLowerCase()
+    if (lower === '--fast') {
+      fast = true
+      continue
+    }
+
+    if ((lower === 'auto' || lower === 'openai' || lower === 'ollama') && requestedProfile === 'auto') {
+      requestedProfile = lower as ProviderProfile | 'auto'
+      continue
+    }
+
+    if (arg.startsWith('--')) {
+      passthroughArgs.push(arg)
+      continue
+    }
+
+    if (requestedProfile === 'auto') {
+      requestedProfile = null
+      break
+    }
+
+    passthroughArgs.push(arg)
+  }
+
+  return {
+    requestedProfile,
+    passthroughArgs,
+    fast,
+  }
 }
 
 function loadPersistedProfile(): ProfileFile | null {
@@ -86,6 +121,21 @@ function buildEnv(profile: ProviderProfile, persisted: ProfileFile | null): Node
   return env
 }
 
+function applyFastFlags(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  env.CLAUDE_CODE_SIMPLE ??= '1'
+  env.CLAUDE_CODE_DISABLE_THINKING ??= '1'
+  env.DISABLE_INTERLEAVED_THINKING ??= '1'
+  env.DISABLE_AUTO_COMPACT ??= '1'
+  env.CLAUDE_CODE_DISABLE_AUTO_MEMORY ??= '1'
+  env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS ??= '1'
+  return env
+}
+
+function quoteArg(arg: string): string {
+  if (!arg.includes(' ') && !arg.includes('"')) return arg
+  return `"${arg.replace(/"/g, '\\"')}"`
+}
+
 function printSummary(profile: ProviderProfile, env: NodeJS.ProcessEnv): void {
   const keySet = Boolean(env.OPENAI_API_KEY)
   console.log(`Launching profile: ${profile}`)
@@ -95,9 +145,10 @@ function printSummary(profile: ProviderProfile, env: NodeJS.ProcessEnv): void {
 }
 
 async function main(): Promise<void> {
-  const requestedProfile = parseProfile(process.argv.slice(2))
+  const options = parseLaunchOptions(process.argv.slice(2))
+  const requestedProfile = options.requestedProfile
   if (!requestedProfile) {
-    console.error('Usage: bun run scripts/provider-launch.ts [openai|ollama|auto]')
+    console.error('Usage: bun run scripts/provider-launch.ts [openai|ollama|auto] [--fast] [-- <cli args>]')
     process.exit(1)
   }
 
@@ -115,6 +166,9 @@ async function main(): Promise<void> {
   }
 
   const env = buildEnv(profile, persisted)
+  if (options.fast) {
+    applyFastFlags(env)
+  }
 
   if (profile === 'openai' && (!env.OPENAI_API_KEY || env.OPENAI_API_KEY === 'SUA_CHAVE')) {
     console.error('OPENAI_API_KEY is required for openai profile and cannot be SUA_CHAVE. Run: bun run profile:init -- --provider openai --api-key <key>')
@@ -129,7 +183,9 @@ async function main(): Promise<void> {
     process.exit(doctorCode)
   }
 
-  const devCode = await runCommand('bun run dev', env)
+  const cliArgs = options.passthroughArgs.map(quoteArg).join(' ')
+  const devCommand = cliArgs ? `bun run dev -- ${cliArgs}` : 'bun run dev'
+  const devCode = await runCommand(devCommand, env)
   process.exit(devCode)
 }
 

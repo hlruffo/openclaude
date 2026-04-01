@@ -1,6 +1,5 @@
 import Anthropic, { type ClientOptions } from '@anthropic-ai/sdk'
 import { randomUUID } from 'crypto'
-import type { GoogleAuth } from 'google-auth-library'
 import {
   checkAndRefreshOAuthTokenIfNeeded,
   getAnthropicApiKey,
@@ -28,6 +27,11 @@ import {
   getVertexRegionForModel,
   isEnvTruthy,
 } from '../../utils/envUtils.js'
+
+const importRuntimeModule = new Function(
+  'specifier',
+  'return import(specifier)',
+) as (specifier: string) => Promise<any>
 
 /**
  * Environment variables for different client types:
@@ -197,7 +201,9 @@ export async function getAnthropicClient({
     return new AnthropicBedrock(bedrockArgs) as unknown as Anthropic
   }
   if (isEnvTruthy(process.env.CLAUDE_CODE_USE_FOUNDRY)) {
-    const { AnthropicFoundry } = await import('@anthropic-ai/foundry-sdk')
+    const { AnthropicFoundry } = await importRuntimeModule(
+      '@anthropic-ai/foundry-sdk',
+    )
     // Determine Azure AD token provider based on configuration
     // SDK reads ANTHROPIC_FOUNDRY_API_KEY by default
     let azureADTokenProvider: (() => Promise<string>) | undefined
@@ -210,7 +216,7 @@ export async function getAnthropicClient({
         const {
           DefaultAzureCredential: AzureCredential,
           getBearerTokenProvider,
-        } = await import('@azure/identity')
+        } = await importRuntimeModule('@azure/identity')
         azureADTokenProvider = getBearerTokenProvider(
           new AzureCredential(),
           'https://cognitiveservices.azure.com/.default',
@@ -218,7 +224,7 @@ export async function getAnthropicClient({
       }
     }
 
-    const foundryArgs: ConstructorParameters<typeof AnthropicFoundry>[0] = {
+    const foundryArgs = {
       ...ARGS,
       ...(azureADTokenProvider && { azureADTokenProvider }),
       ...(isDebugToStdErr() && { logger: createStderrLogger() }),
@@ -234,8 +240,8 @@ export async function getAnthropicClient({
     }
 
     const [{ AnthropicVertex }, { GoogleAuth }] = await Promise.all([
-      import('@anthropic-ai/vertex-sdk'),
-      import('google-auth-library'),
+      importRuntimeModule('@anthropic-ai/vertex-sdk'),
+      importRuntimeModule('google-auth-library'),
     ])
     // TODO: Cache either GoogleAuth instance or AuthClient to improve performance
     // Currently we create a new GoogleAuth instance for every getAnthropicClient() call
@@ -277,7 +283,11 @@ export async function getAnthropicClient({
           getClient: () => ({
             getRequestHeaders: () => ({}),
           }),
-        } as unknown as GoogleAuth)
+        } as {
+          getClient: () => {
+            getRequestHeaders: () => Record<string, string>
+          }
+        })
       : new GoogleAuth({
           scopes: ['https://www.googleapis.com/auth/cloud-platform'],
           // Only use ANTHROPIC_VERTEX_PROJECT_ID as last resort fallback
@@ -295,7 +305,7 @@ export async function getAnthropicClient({
               }),
         })
 
-    const vertexArgs: ConstructorParameters<typeof AnthropicVertex>[0] = {
+    const vertexArgs = {
       ...ARGS,
       region: getVertexRegionForModel(model),
       googleAuth,
